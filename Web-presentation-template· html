@@ -1,0 +1,238 @@
+<!--
+Web Presentation Template (single-file)
+Description: A lightweight, responsive web page that visually mimics a PowerPoint presentation (16:9).
+Integration: Call `window.activatePresentation(presentationJson)` from your orchestrator or action to load and show the presentation.
+
+Expected JSON schema:
+{
+  "title": "Presentation Title",
+  "slides": [
+    {
+      "title": "Slide 1 Title",
+      "content": ["Bullet 1", "Bullet 2"],
+      "visual": "bar chart" // optional descriptor shown as subtitle or placeholder
+    },
+    ...
+  ]
+}
+
+Features:
+- Render 8-12 slides (or any count)
+- Slide navigation (prev/next, keyboard, touch)
+- Autoplay mode
+- Print-to-PDF friendly (for export)
+- Hooks: window.activatePresentation(json), window.nextSlide(), window.prevSlide(), window.goToSlide(i), window.startAutoPlay(ms)
+-->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Web Presentation (PowerPoint-like)</title>
+  <style>
+    :root{
+      --bg:#f2f4f8;
+      --slide-bg: #ffffff;
+      --accent:#0b63d6;
+      --muted:#6b7280;
+      --shadow: 0 6px 30px rgba(16,24,40,0.12);
+      --slide-width: 1280px; /* 16:9 */
+      --slide-height: 720px;
+      --gap:24px;
+      font-family: Inter, Roboto, Arial, sans-serif;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);}
+    .app{
+      min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;
+    }
+    .stage{
+      width: calc(var(--slide-width) * 0.75); /* responsive scaling */
+      max-width: calc(100% - 48px);
+      aspect-ratio: 16 / 9;
+      background: var(--slide-bg);
+      box-shadow: var(--shadow);
+      position:relative;overflow:hidden;border-radius:12px;display:flex;flex-direction:column;
+      transform-origin:center center;
+    }
+    /* slide content area */
+    .slide{
+      padding:36px 48px;box-sizing:border-box;flex:1;display:none;flex-direction:column;gap:12px;
+    }
+    .slide.active{display:flex;animation:fadeIn 300ms ease-out;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+    .title{font-size:28px;font-weight:700;color:#0f172a;margin:0}
+    .subtitle{color:var(--muted);font-size:14px}
+    .bullets{margin-top:8px;display:flex;flex-direction:column;gap:8px}
+    .bullet{font-size:18px;line-height:1.3;color:#0b1220}
+
+    .visual-placeholder{margin-top:auto;padding:12px;border-radius:8px;background:#f8fafc;border:1px dashed #e6edf6;color:#334155;font-size:14px}
+
+    /* controls */
+    .controls{display:flex;gap:12px;align-items:center;margin-top:16px}
+    .btn{background:var(--accent);color:white;padding:10px 14px;border-radius:8px;border:none;cursor:pointer;font-weight:600}
+    .btn.ghost{background:transparent;color:var(--accent);border:2px solid rgba(11,99,214,0.12)}
+    .pager{color:var(--muted);font-weight:600}
+
+    /* slide index / thumbnails */
+    .footer{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:transparent}
+
+    /* small screen tweaks */
+    @media (max-width:900px){
+      .title{font-size:20px}
+      .bullet{font-size:16px}
+      .stage{width:100%;aspect-ratio:16/9}
+    }
+
+    /* printer friendly (PDF) */
+    @media print{
+      body{background:white}
+      .controls,.footer{display:none}
+      .stage{box-shadow:none;border-radius:0;width:100%;height:auto}
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="stage" id="stage" aria-live="polite">
+      <!-- Slides will be injected here -->
+    </div>
+
+    <div class="controls" style="margin-top:18px">
+      <button class="btn" id="prevBtn">Previous</button>
+      <button class="btn" id="nextBtn">Next</button>
+      <button class="btn ghost" id="autoBtn">Start Auto</button>
+      <div class="pager" id="pager">0 / 0</div>
+    </div>
+
+    <div class="footer" style="width:calc(var(--slide-width) * 0.75);max-width:calc(100% - 48px);">
+      <div style="color:var(--muted);font-size:13px">Web Presentation Template — Call <code>window.activatePresentation(json)</code> to load</div>
+      <div style="color:var(--muted);font-size:13px">Use <code>startAutoPlay(ms)</code> to autoplay</div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const stage = document.getElementById('stage');
+      const prevBtn = document.getElementById('prevBtn');
+      const nextBtn = document.getElementById('nextBtn');
+      const autoBtn = document.getElementById('autoBtn');
+      const pager = document.getElementById('pager');
+
+      let slides = [];
+      let current = 0;
+      let autoId = null;
+
+      function clearStage(){ stage.innerHTML = ''; }
+
+      function renderSlides(data){
+        clearStage();
+        slides = data.slides || [];
+        const title = data.title || '';
+
+        slides.forEach((s, idx)=>{
+          const slideEl = document.createElement('section');
+          slideEl.className = 'slide';
+          slideEl.dataset.index = idx;
+
+          // Header area
+          const h = document.createElement('h2'); h.className = 'title'; h.textContent = s.title || '';
+          slideEl.appendChild(h);
+
+          if(s.subtitle){
+            const sub = document.createElement('div'); sub.className = 'subtitle'; sub.textContent = s.subtitle; slideEl.appendChild(sub);
+          }
+
+          // bullets
+          if(Array.isArray(s.content) && s.content.length){
+            const bwrap = document.createElement('div'); bwrap.className = 'bullets';
+            s.content.slice(0,6).forEach(b=>{
+              const bi = document.createElement('div'); bi.className = 'bullet'; bi.textContent = '• ' + b; bwrap.appendChild(bi);
+            });
+            slideEl.appendChild(bwrap);
+          }
+
+          // visual placeholder
+          if(s.visual){
+            const v = document.createElement('div'); v.className = 'visual-placeholder'; v.textContent = 'Visual: ' + s.visual; slideEl.appendChild(v);
+          }
+
+          stage.appendChild(slideEl);
+        });
+
+        // set first
+        current = 0;
+        updateView();
+        updatePager();
+      }
+
+      function updateView(){
+        const nodes = stage.querySelectorAll('.slide');
+        nodes.forEach(n=>n.classList.remove('active'));
+        const active = stage.querySelector('.slide[data-index="'+current+'"]');
+        if(active){ active.classList.add('active'); }
+      }
+
+      function updatePager(){ pager.textContent = (slides.length? (current+1) : 0) + ' / ' + slides.length; }
+
+      function nextSlide(){ if(current < slides.length - 1) current++; updateView(); updatePager(); }
+      function prevSlide(){ if(current > 0) current--; updateView(); updatePager(); }
+      function goToSlide(i){ if(i>=0 && i<slides.length){ current = i; updateView(); updatePager(); }}
+
+      function startAutoPlay(ms=4000){ stopAutoPlay(); autoId = setInterval(()=>{ if(current >= slides.length-1){ stopAutoPlay(); } else { nextSlide(); } }, ms); autoBtn.textContent = 'Stop Auto'; }
+      function stopAutoPlay(){ if(autoId){ clearInterval(autoId); autoId = null; autoBtn.textContent = 'Start Auto'; }}
+
+      // expose functions globally for integration
+      window.activatePresentation = function(presentationJson){
+        try{
+          if(typeof presentationJson === 'string') presentationJson = JSON.parse(presentationJson);
+          if(!presentationJson || !Array.isArray(presentationJson.slides)){
+            console.warn('Presentation JSON invalid. Expected {title, slides:[...]}.');
+            return;
+          }
+          renderSlides(presentationJson);
+        }catch(e){console.error('Error activating presentation', e)}
+      }
+
+      window.nextSlide = nextSlide;
+      window.prevSlide = prevSlide;
+      window.goToSlide = goToSlide;
+      window.startAutoPlay = startAutoPlay;
+      window.stopAutoPlay = stopAutoPlay;
+
+      // UI bindings
+      nextBtn.addEventListener('click', nextSlide);
+      prevBtn.addEventListener('click', prevSlide);
+      autoBtn.addEventListener('click', ()=>{ if(autoId) stopAutoPlay(); else startAutoPlay(4000); });
+
+      // keyboard navigation
+      document.addEventListener('keydown', (e)=>{
+        if(e.key === 'ArrowRight' || e.key === 'PageDown') nextSlide();
+        if(e.key === 'ArrowLeft' || e.key === 'PageUp') prevSlide();
+        if(e.key === 'Home') goToSlide(0);
+        if(e.key === 'End') goToSlide(slides.length-1);
+      });
+
+      // basic touch support
+      let touchStartX = 0;
+      stage.addEventListener('touchstart', (e)=>{ touchStartX = e.touches[0].clientX; });
+      stage.addEventListener('touchend', (e)=>{ const dx = e.changedTouches[0].clientX - touchStartX; if(dx < -40) nextSlide(); if(dx > 40) prevSlide(); });
+
+      // initial demo data if loaded directly
+      const demo = {
+        title: 'Demo: Sales Briefing',
+        slides: [
+          {title:'Cover — Acme Corp', content:['Meeting objective: Explore partnership','Date:'], visual:'Logo / Client photo'},
+          {title:'Opportunity Overview', content:['Market size','Pain points','Why now?'], visual:'2-column diagram'},
+          {title:'Proposed Solution', content:['Approach','Key benefits','Timeline'], visual:'3-step framework'},
+          {title:'Next Steps', content:['Pilot proposal','Stakeholders','Decision timeline'], visual:'timeline'}
+        ]
+      };
+      // auto-load demo when file opened directly (optional)
+      // window.activatePresentation(demo);
+
+    })();
+  </script>
+</body>
+</html>
